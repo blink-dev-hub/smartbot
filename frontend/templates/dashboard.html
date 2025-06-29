@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>SmartBot Dashboard</title>
+    <style>
+        body { font-family: Arial, sans-serif; background: #f4f4f4; margin: 0; }
+        .sidebar {
+            position: fixed; left: 0; top: 0; width: 220px; height: 100vh; background: #222; color: #fff; padding-top: 30px;
+        }
+        .sidebar a {
+            display: block; color: #fff; padding: 15px 30px; text-decoration: none; transition: background 0.2s; }
+        .sidebar a:hover, .sidebar a.active { background: #444; }
+        .main { margin-left: 220px; padding: 30px; }
+        h1 { margin-top: 0; }
+        .section { display: none; }
+        .section.active { display: block; }
+        .logout-link { color: #ff6666; }
+    </style>
+    <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+    <script>
+        function showSection(id) {
+            document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
+            document.getElementById(id).classList.add('active');
+            document.querySelectorAll('.sidebar a').forEach(a => a.classList.remove('active'));
+            document.getElementById('nav-' + id).classList.add('active');
+        }
+        window.onload = function() {
+            showSection('dashboard');
+            loadScreenshots(); // Only screenshots still use polling
+
+            // Socket.IO connection
+            const socket = io('http://localhost:5000'); // Backend socket endpoint
+            socket.on('connect', function() {
+                console.log('Socket.IO connected!');
+            });
+            socket.on('disconnect', function() {
+                console.log('Socket.IO disconnected!');
+            });
+            socket.on('pong', function() {
+                document.getElementById('socket-test-result').innerText = 'Pong received from backend!';
+                console.log('Pong received from backend!');
+            });
+            document.getElementById('test-socket-btn').onclick = function() {
+                document.getElementById('socket-test-result').innerText = 'Sending ping...';
+                socket.emit('ping');
+            };
+
+            // Real-time OTT Checks
+            let ottRows = [];
+            socket.on('ott_check', function(data) {
+                ottRows.unshift(`<tr><td>${data.timestamp}</td><td>${data.details.service || '-'}</td><td>${data.details.ip || '-'}</td><td>${data.details.passed ? 'PASS' : 'FAIL'}</td><td>${data.details.score || '-'}</td><td>-</td></tr>`);
+                if (ottRows.length > 100) ottRows.pop();
+                document.getElementById('ott-results').innerHTML = '<table><tr><th>Time</th><th>Service</th><th>IP</th><th>Result</th><th>Score</th><th>Screenshot</th></tr>' + ottRows.join('') + '</table>';
+            });
+            // Real-time Logs
+            let logRows = [];
+            socket.on('log', function(data) {
+                logRows.unshift(`<tr><td>${data.timestamp}</td><td>${data.event_type}</td><td>${JSON.stringify(data.details)}</td></tr>`);
+                if (logRows.length > 100) logRows.pop();
+                document.getElementById('logs-viewer').innerHTML = '<table><tr><th>Time</th><th>Type</th><th>Details</th></tr>' + logRows.join('') + '</table>';
+            });
+            // Real-time Status
+            socket.on('status_update', function(data) {
+                let html = '';
+                html += `<b>Current IP:</b> ${data.current_ip || '-'}<br>`;
+                html += `<b>Last Known Good IP:</b> ${data.last_known_good_ip || '-'}<br>`;
+                html += `<b>Paused:</b> ${data.is_paused ? 'Yes' : 'No'}<br>`;
+                html += `<b>Safe Mode:</b> ${data.is_safe_mode ? 'Yes' : 'No'}<br>`;
+                html += `<b>Retries:</b> ${data.retries || 0}<br>`;
+                document.getElementById('dashboard-summary').innerHTML = html;
+                let deviceHtml = '<table><tr><th>Current IP</th><th>Last Good IP</th><th>Paused</th><th>Safe Mode</th><th>Retries</th></tr>';
+                deviceHtml += `<tr><td>${data.current_ip || '-'}</td><td>${data.last_known_good_ip || '-'}</td><td>${data.is_paused ? 'Yes' : 'No'}</td><td>${data.is_safe_mode ? 'Yes' : 'No'}</td><td>${data.retries || 0}</td></tr>`;
+                deviceHtml += '</table>';
+                document.getElementById('device-status').innerHTML = deviceHtml;
+            });
+        };
+
+        async function loadScreenshots() {
+            try {
+                const res = await fetch('/frontend_api/screenshots');
+                const data = await res.json();
+                let html = '<div style="display:flex;flex-wrap:wrap;gap:10px;">';
+                for (const file of data.files) {
+                    html += `<div><a href="/frontend_api/screenshot/${file}" target="_blank"><img src="/frontend_api/screenshot/${file}" style="width:120px;height:auto;border:1px solid #ccc;border-radius:4px;"></a><div style="font-size:12px;text-align:center;">${file}</div></div>`;
+                }
+                html += '</div>';
+                document.getElementById('screenshot-gallery').innerHTML = html;
+            } catch (e) {
+                document.getElementById('screenshot-gallery').innerHTML = '<div style="color:red">Failed to load screenshots</div>';
+            }
+        }
+    </script>
+</head>
+<body>
+    <div class="sidebar">
+        <a href="#" id="nav-dashboard" onclick="showSection('dashboard');return false;">Dashboard</a>
+        <a href="#" id="nav-device" onclick="showSection('device');return false;">Device Status</a>
+        <a href="#" id="nav-ott" onclick="showSection('ott');return false;">OTT Checks</a>
+        <a href="#" id="nav-logs" onclick="showSection('logs');return false;">Logs</a>
+        <a href="#" id="nav-screenshots" onclick="showSection('screenshots');return false;">Screenshots</a>
+        <a href="/logout" class="logout-link">Logout</a>
+    </div>
+    <div class="main">
+        <div id="dashboard" class="section active">
+            <h1>Dashboard Overview</h1>
+            <div id="dashboard-summary">
+                <!-- System summary will be loaded here -->
+            </div>
+            <button id="test-socket-btn">Test Socket Ping</button>
+            <div id="socket-test-result"></div>
+        </div>
+        <div id="device" class="section">
+            <h1>Device & VPN Status</h1>
+            <div id="device-status">
+                <!-- Device/VPN status will be loaded here -->
+            </div>
+        </div>
+        <div id="ott" class="section">
+            <h1>OTT Check Results</h1>
+            <div id="ott-results">
+                <!-- OTT check results will be loaded here -->
+            </div>
+        </div>
+        <div id="logs" class="section">
+            <h1>Logs</h1>
+            <div id="logs-viewer">
+                <!-- Logs will be loaded here -->
+            </div>
+        </div>
+        <div id="screenshots" class="section">
+            <h1>Screenshot Gallery</h1>
+            <div id="screenshot-gallery">
+                <!-- Screenshots will be loaded here -->
+            </div>
+        </div>
+    </div>
+</body>
+</html> 

@@ -1,0 +1,23 @@
+{
+    "paths": {
+      "log": "smartbot.log",
+      "screenshots": "screenshots",
+      "ipcache": "ip_cache.json",
+      "database": "smartbot.db"
+    },
+    "ott_services": {
+      "hotstar": "https://www.hotstar.com",
+      "sonyliv": "https://www.sonyliv.com",
+      "zee5": "https://www.zee5.com"
+    },
+    "telegram": {
+      "bot_token": "7607828569:AAGCy0lsXjH4Krij7o9P9qrgeZD3AkRdfGA",
+      "chat_id": "7820798446"
+    },
+    "api": {
+      "host": "0.0.0.0",
+      "port": 5000
+    },
+    "loop_interval_seconds": 300,
+    "max_retries": 3
+}
