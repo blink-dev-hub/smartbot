@@ -12,93 +12,226 @@
             display: block; color: #fff; padding: 15px 30px; text-decoration: none; transition: background 0.2s; }
         .sidebar a:hover, .sidebar a.active { background: #444; }
         .main { margin-left: 220px; padding: 30px; }
-        h1 { margin-top: 0; }
+        h1, h3 { margin-top: 0; }
         .section { display: none; }
         .section.active { display: block; }
         .logout-link { color: #ff6666; }
+        .log-entry.log-error { color: #ff8a8a; }
+        .log-entry.log-warning { color: #ffd68a; }
+        .log-entry.log-info { color: #a2d2ff; }
+        .ott-pass { color: #8dff8a; font-weight: bold; }
+        .ott-fail { color: #ff8a8a; font-weight: bold; }
+        .refresh-btn {
+            float: right; padding: 5px 10px; cursor: pointer; border: 1px solid #ccc; border-radius: 4px; background: #eee;
+        }
     </style>
     <script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
     <script>
+        // NEW: Function to show a section and automatically refresh its content
         function showSection(id) {
             document.querySelectorAll('.section').forEach(s => s.classList.remove('active'));
             document.getElementById(id).classList.add('active');
             document.querySelectorAll('.sidebar a').forEach(a => a.classList.remove('active'));
             document.getElementById('nav-' + id).classList.add('active');
+
+            // Automatically refresh content when switching to a tab
+            if (id === 'logs') {
+                loadLogs();
+            } else if (id === 'ott') {
+                loadOttChecks();
+            } else if (id === 'screenshots') {
+                loadScreenshots();
+            } else if (id === 'drm') {
+                loadDrmHandshakes();
+            }
         }
+
+        window.isPaused = false;
+        function updatePauseResumeButton() {
+            const btn = document.getElementById('pause-resume-btn');
+            const socketStatus = document.getElementById('socket-status');
+            if (window.isPaused) {
+                btn.textContent = 'Resume';
+                if (window.socketConnected) socketStatus.style.background = 'yellow';
+            } else {
+                btn.textContent = 'Pause';
+                if (window.socketConnected) socketStatus.style.background = 'green';
+            }
+        }
+
         window.onload = function() {
             showSection('dashboard');
-            loadScreenshots(); // Only screenshots still use polling
+            window.socketConnected = false;
+            // Connect to the backend socket.io server
+            const socket = io(`http://${window.location.hostname}:5000`);
 
-            // Socket.IO connection
-            const socket = io('http://localhost:5000'); // Backend socket endpoint
-            socket.on('connect', function() {
-                console.log('Socket.IO connected!');
+            socket.on('connect', () => {
+                window.socketConnected = true;
+                updatePauseResumeButton();
             });
-            socket.on('disconnect', function() {
-                console.log('Socket.IO disconnected!');
+            socket.on('disconnect', () => {
+                window.socketConnected = false;
+                document.getElementById('socket-status').style.background = 'red';
             });
-            socket.on('pong', function() {
-                document.getElementById('socket-test-result').innerText = 'Pong received from backend!';
-                console.log('Pong received from backend!');
-            });
-            document.getElementById('test-socket-btn').onclick = function() {
-                document.getElementById('socket-test-result').innerText = 'Sending ping...';
-                socket.emit('ping');
-            };
-
-            // Real-time OTT Checks
-            let ottRows = [];
-            socket.on('ott_check', function(data) {
-                ottRows.unshift(`<tr><td>${data.timestamp}</td><td>${data.details.service || '-'}</td><td>${data.details.ip || '-'}</td><td>${data.details.passed ? 'PASS' : 'FAIL'}</td><td>${data.details.score || '-'}</td><td>-</td></tr>`);
-                if (ottRows.length > 100) ottRows.pop();
-                document.getElementById('ott-results').innerHTML = '<table><tr><th>Time</th><th>Service</th><th>IP</th><th>Result</th><th>Score</th><th>Screenshot</th></tr>' + ottRows.join('') + '</table>';
-            });
-            // Real-time Logs
-            let logRows = [];
-            socket.on('log', function(data) {
-                logRows.unshift(`<tr><td>${data.timestamp}</td><td>${data.event_type}</td><td>${JSON.stringify(data.details)}</td></tr>`);
-                if (logRows.length > 100) logRows.pop();
-                document.getElementById('logs-viewer').innerHTML = '<table><tr><th>Time</th><th>Type</th><th>Details</th></tr>' + logRows.join('') + '</table>';
-            });
+            
             // Real-time Status
             socket.on('status_update', function(data) {
-                let html = '';
-                html += `<b>Current IP:</b> ${data.current_ip || '-'}<br>`;
-                html += `<b>Last Known Good IP:</b> ${data.last_known_good_ip || '-'}<br>`;
-                html += `<b>Paused:</b> ${data.is_paused ? 'Yes' : 'No'}<br>`;
-                html += `<b>Safe Mode:</b> ${data.is_safe_mode ? 'Yes' : 'No'}<br>`;
-                html += `<b>Retries:</b> ${data.retries || 0}<br>`;
+                window.isPaused = data.is_paused;
+                updatePauseResumeButton();
+                let html = `<b>Current IP:</b> ${data.current_ip || '-'}<br>
+                            <b>Last Known Good IP:</b> ${data.last_known_good_ip || '-'}<br>
+                            <b>Paused:</b> ${data.is_paused ? 'Yes' : 'No'}<br>
+                            <b>Safe Mode:</b> ${data.is_safe_mode ? 'Yes' : 'No'}<br>
+                            <b>Retries:</b> ${data.retries || 0}<br>`;
                 document.getElementById('dashboard-summary').innerHTML = html;
-                let deviceHtml = '<table><tr><th>Current IP</th><th>Last Good IP</th><th>Paused</th><th>Safe Mode</th><th>Retries</th></tr>';
-                deviceHtml += `<tr><td>${data.current_ip || '-'}</td><td>${data.last_known_good_ip || '-'}</td><td>${data.is_paused ? 'Yes' : 'No'}</td><td>${data.is_safe_mode ? 'Yes' : 'No'}</td><td>${data.retries || 0}</td></tr>`;
-                deviceHtml += '</table>';
-                document.getElementById('device-status').innerHTML = deviceHtml;
+            });
+
+            // Real-time Log Stream
+            socket.on('log_stream', function(data) {
+                const logViewer = document.getElementById('live-log-viewer');
+                if (logViewer) {
+                    const newRow = document.createElement('div');
+                    newRow.className = `log-entry log-${data.level.toLowerCase()}`;
+                    newRow.textContent = data.message;
+                    logViewer.appendChild(newRow);
+                    logViewer.scrollTop = logViewer.scrollHeight;
+                }
+            });
+
+            // Real-time DB Log Events
+            socket.on('new_db_log', function(data) {
+                const viewer = document.getElementById('logs-table-body');
+                if (viewer) {
+                    const newRow = document.createElement('tr');
+                    newRow.innerHTML = `<td>${data.timestamp}</td><td>${data.event_type}</td><td>${data.details}</td>`;
+                    viewer.prepend(newRow);
+                }
+            });
+
+            // Real-time OTT Check events
+            socket.on('ott_check', function(data) {
+                const viewer = document.getElementById('ott-table-body');
+                if (viewer) {
+                    const newRow = document.createElement('tr');
+                    let details = data.details;
+                    let result_class = details.passed ? 'ott-pass' : 'ott-fail';
+                    let screenshotFile = details.screenshot ? details.screenshot.split(/[\\\\/]/).pop() : null;
+                    let screenshotLink = screenshotFile ? `<a href="/screenshots/${screenshotFile}" target="_blank">View</a>` : 'N/A';
+                    newRow.innerHTML = `<td>${data.timestamp}</td><td>${details.service || '-'}</td><td>${details.ip || '-'}</td><td class="${result_class}">${details.passed ? 'PASS' : 'FAIL'}</td><td>${details.score || '-'}</td><td>${screenshotLink}</td>`;
+                    viewer.prepend(newRow);
+                }
+            });
+            
+            // Real-time Screenshot events
+            socket.on('new_screenshot', function(data) {
+                const gallery = document.getElementById('screenshot-gallery-container');
+                if (gallery) {
+                    const newImage = document.createElement('div');
+                    newImage.innerHTML = `<a href="/screenshots/${data.filename}" target="_blank"><img src="/screenshots/${data.filename}" style="width:120px;height:auto;border:1px solid #ccc;border-radius:4px;"></a><div style="font-size:12px;text-align:center;">${data.filename}</div>`;
+                    gallery.prepend(newImage);
+                }
+            });
+
+            // Real-time DRM Handshake events
+            socket.on('drm_handshake', function(data) {
+                const viewer = document.getElementById('drm-events-table-body');
+                if (viewer) {
+                    const newRow = document.createElement('tr');
+                    let details = data.details;
+                    let screenshotLink = details.screenshot ? `<a href="/screenshots/${details.screenshot.split(/[\\\\/]/).pop()}" target="_blank">View</a>` : 'N/A';
+                    newRow.innerHTML = `<td>${data.timestamp}</td><td>${details.service || '-'}</td><td>${details.ip || '-'}</td><td>${screenshotLink}</td>`;
+                    viewer.prepend(newRow); // Add to top
+                }
             });
         };
 
-        async function loadScreenshots() {
-            try {
-                const res = await fetch('/frontend_api/screenshots');
+        async function loadData(url, targetElement, rowBuilder) {
+             try {
+                targetElement.innerHTML = "Loading...";
+                const res = await fetch(url);
+                if (!res.ok) throw new Error(`HTTP error! status: ${res.status}`);
                 const data = await res.json();
-                let html = '<div style="display:flex;flex-wrap:wrap;gap:10px;">';
+                targetElement.innerHTML = rowBuilder(data);
+            } catch (e) {
+                targetElement.innerHTML = `<div style="color:red">Failed to load data: ${e.message}</div>`;
+            }
+        }
+        
+        function loadLogs() {
+            loadData('/api/logs', document.getElementById('logs-viewer'), data => {
+                let rows = data.map(row => {
+                    let details = typeof row.details === 'string' ? row.details : JSON.stringify(row.details);
+                    return `<tr><td>${row.timestamp}</td><td>${row.event_type}</td><td>${details}</td></tr>`;
+                }).join('');
+                return '<table><thead><tr><th>Time</th><th>Type</th><th>Details</th></tr></thead><tbody id="logs-table-body">' + rows + '</tbody></table>';
+            });
+        }
+        
+        function loadOttChecks() {
+            loadData('/api/ott_checks', document.getElementById('ott-results'), data => {
+                let rows = data.map(row => {
+                    let details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+                    let result_class = details.passed ? 'ott-pass' : 'ott-fail';
+                    let screenshotFile = details.screenshot ? details.screenshot.split(/[\\\\/]/).pop() : null;
+                    let screenshotLink = screenshotFile ? `<a href="/screenshots/${screenshotFile}" target="_blank">View</a>` : 'N/A';
+                    return `<tr><td>${row.timestamp}</td><td>${details.service || '-'}</td><td>${details.ip || '-'}</td><td class="${result_class}">${details.passed ? 'PASS' : 'FAIL'}</td><td>${details.score || '-'}</td><td>${screenshotLink}</td></tr>`;
+                }).join('');
+                return '<table><thead><tr><th>Time</th><th>Service</th><th>IP</th><th>Result</th><th>Score</th><th>Screenshot</th></tr></thead><tbody id="ott-table-body">' + rows + '</tbody></table>';
+            });
+        }
+        
+        async function loadScreenshots() {
+            const gallery = document.getElementById('screenshot-gallery');
+            gallery.innerHTML = "Loading...";
+            try {
+                const res = await fetch('/api/screenshots');
+                const data = await res.json();
+                if (data.files.length === 0) {
+                    gallery.innerHTML = "No screenshots found.";
+                    return;
+                }
+                let html = '<div id="screenshot-gallery-container" style="display:flex;flex-wrap:wrap;gap:10px;">';
                 for (const file of data.files) {
-                    html += `<div><a href="/frontend_api/screenshot/${file}" target="_blank"><img src="/frontend_api/screenshot/${file}" style="width:120px;height:auto;border:1px solid #ccc;border-radius:4px;"></a><div style="font-size:12px;text-align:center;">${file}</div></div>`;
+                    html += `<div><a href="/screenshots/${file}" target="_blank"><img src="/screenshots/${file}" style="width:120px;height:auto;border:1px solid #ccc;border-radius:4px;"></a><div style="font-size:12px;text-align:center;">${file}</div></div>`;
                 }
                 html += '</div>';
-                document.getElementById('screenshot-gallery').innerHTML = html;
+                gallery.innerHTML = html;
             } catch (e) {
-                document.getElementById('screenshot-gallery').innerHTML = '<div style="color:red">Failed to load screenshots</div>';
+                gallery.innerHTML = '<div style="color:red">Failed to load screenshots</div>';
             }
+        }
+
+        function controlBot(action) {
+            fetch('/api/control/' + action, {method: 'POST'});
+        }
+
+        function togglePauseResume() {
+            const action = window.isPaused ? 'resume' : 'pause';
+            window.isPaused = !window.isPaused; // Optimistic update
+            updatePauseResumeButton();
+            controlBot(action);
+        }
+
+        async function loadDrmHandshakes() {
+            loadData('/api/drm_handshakes', document.getElementById('drm-events'), data => {
+                let rows = data.map(row => {
+                    let details = typeof row.details === 'string' ? JSON.parse(row.details) : row.details;
+                    let screenshotFile = details.screenshot ? details.screenshot.split(/[\\\\/]/).pop() : null;
+                    let screenshotLink = screenshotFile ? `<a href="/screenshots/${screenshotFile}" target="_blank">View</a>` : 'N/A';
+                    return `<tr><td>${row.timestamp}</td><td>${details.service || '-'}</td><td>${details.ip || '-'}</td><td>${screenshotLink}</td></tr>`;
+                }).join('');
+                return '<table><thead><tr><th>Time</th><th>Service</th><th>IP</th><th>Screenshot</th></tr></thead><tbody id="drm-events-table-body">' + rows + '</tbody></table>';
+            });
         }
     </script>
 </head>
 <body>
     <div class="sidebar">
-        <a href="#" id="nav-dashboard" onclick="showSection('dashboard');return false;">Dashboard</a>
-        <a href="#" id="nav-device" onclick="showSection('device');return false;">Device Status</a>
+        <a href="#" id="nav-dashboard" onclick="showSection('dashboard');return false;" class="active">Dashboard</a>
         <a href="#" id="nav-ott" onclick="showSection('ott');return false;">OTT Checks</a>
         <a href="#" id="nav-logs" onclick="showSection('logs');return false;">Logs</a>
         <a href="#" id="nav-screenshots" onclick="showSection('screenshots');return false;">Screenshots</a>
+        <a href="#" id="nav-drm" onclick="showSection('drm');return false;">DRM Handshakes</a>
         <a href="/logout" class="logout-link">Logout</a>
     </div>
     <div class="main">
@@ -107,33 +240,45 @@
             <div id="dashboard-summary">
                 <!-- System summary will be loaded here -->
             </div>
-            <button id="test-socket-btn">Test Socket Ping</button>
-            <div id="socket-test-result"></div>
-        </div>
-        <div id="device" class="section">
-            <h1>Device & VPN Status</h1>
-            <div id="device-status">
-                <!-- Device/VPN status will be loaded here -->
+            <div>
+                <button id="pause-resume-btn" onclick="togglePauseResume()">Pause</button>
+                <button onclick="controlBot('rotate')">Rotate IP</button>
+                <span id="socket-status" style="display:inline-block;width:16px;height:16px;border-radius:50%;background:#ccc;margin-left:10px;vertical-align:middle;"></span>
             </div>
         </div>
+
         <div id="ott" class="section">
-            <h1>OTT Check Results</h1>
+            <h1>OTT Check Results <button class="refresh-btn" onclick="loadOttChecks()">Refresh</button></h1>
             <div id="ott-results">
                 <!-- OTT check results will be loaded here -->
             </div>
         </div>
+
         <div id="logs" class="section">
-            <h1>Logs</h1>
-            <div id="logs-viewer">
-                <!-- Logs will be loaded here -->
+            <h1>Logs <button class="refresh-btn" onclick="loadLogs()">Refresh</button></h1>
+            <h3>Database Events (Last 100)</h3>
+            <div id="logs-viewer" style="height: 250px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; background: #fff; margin-bottom: 20px;">
+                <!-- Logs from DB will be loaded here -->
+            </div>
+            <h3>Live Log Stream</h3>
+            <div id="live-log-viewer" style="height: 350px; overflow-y: scroll; border: 1px solid #ccc; padding: 10px; background: #111; color: #eee; font-family: monospace;">
+                <!-- Live logs will be streamed here -->
             </div>
         </div>
+
         <div id="screenshots" class="section">
-            <h1>Screenshot Gallery</h1>
+            <h1>Screenshot Gallery <button class="refresh-btn" onclick="loadScreenshots()">Refresh</button></h1>
             <div id="screenshot-gallery">
                 <!-- Screenshots will be loaded here -->
             </div>
         </div>
+
+        <div id="drm" class="section">
+            <h1>DRM Handshake Events <button class="refresh-btn" onclick="loadDrmHandshakes()">Refresh</button></h1>
+            <div id="drm-events">
+                <!-- DRM handshake events will be loaded here -->
+            </div>
+        </div>
     </div>
 </body>
-</html> 
+</html>

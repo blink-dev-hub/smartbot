@@ -16,7 +16,6 @@ class SmartBot:
     def __init__(self, config):
         self.config = config
         self.logger = logging.getLogger('SmartBot')
-        self.setup_logging()
 
         # State
         self.is_paused = False
@@ -38,18 +37,31 @@ class SmartBot:
         self.db_conn = database.setup_database(self.db_path)
         self.db = database
         self.telegram = telegram_alerter
-        self.api_app, self.api_socketio = create_api(self)
+        # Get the socket handler from the api module
+        self.api_app, self.api_socketio, socket_io_handler = create_api(self)
+        
+        # Pass handler to logging setup
+        self.setup_logging(socket_io_handler)
 
-    def setup_logging(self):
+    def setup_logging(self, socket_handler=None):
+        # Prevent adding handlers multiple times
+        if self.logger.hasHandlers():
+            self.logger.handlers.clear()
+
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
         log_path = self.config['paths'].get('log', 'smartbot.log')
-        logging.basicConfig(
-            level=logging.INFO,
-            format='%(asctime)s - %(levelname)s - %(message)s',
-            handlers=[
-                logging.FileHandler(log_path),
-                logging.StreamHandler()
-            ]
-        )
+        
+        # Add file and stream handlers
+        self.logger.addHandler(logging.FileHandler(log_path))
+        self.logger.addHandler(logging.StreamHandler())
+        
+        # Add the socket handler for live streaming
+        if socket_handler:
+            socket_handler.setFormatter(formatter)
+            self.logger.addHandler(socket_handler)
+            
+        self.logger.setLevel(logging.INFO)
+
 
     def load_ip_cache(self):
         with open(self.ip_cache_path) as f:
@@ -73,7 +85,7 @@ class SmartBot:
         return ip in self.load_ip_cache()['bad']
 
     def score_ott_result(self, passed):
-        return 100 if passed else 0
+        return 50 if passed else 0
     
     def get_status(self):
         return {
@@ -102,6 +114,7 @@ class SmartBot:
 
     def run(self):
         self.db.log_event(self.db_conn, "lifecycle", "SmartBot started")
+        self.logger.info("SmartBot Started")
         self.telegram.send_message(
             self.config['telegram']['bot_token'],
             self.config['telegram']['chat_id'],
@@ -113,6 +126,7 @@ class SmartBot:
         
         while True:
             if self.is_paused or self.is_safe_mode:
+                self.logger.info("Bot is paused or in safe mode. Sleeping...")
                 time.sleep(5)
                 continue
 
@@ -137,21 +151,48 @@ class SmartBot:
                 # 3. OTT checks
                 all_passed = True
                 for service, url in self.config.get('ott_services', {}).items():
-                    passed, screenshot = check_ott(service, url, self.screenshots_dir, self.logger)
-                    score = self.score_ott_result(passed)
-                    log_data = {'service': service, 'ip': current_ip, 'passed': passed, 'score': score}
-                    self.db.log_event(self.db_conn, "ott_check", json.dumps(log_data))
-                    self.api_socketio.emit('ott_check', {'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'), 'event_type': 'ott_check', 'details': log_data})
-                    self.api_socketio.emit('log', {'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'), 'event_type': 'ott_check', 'details': log_data})
+                    self.logger.info(f"Checking OTT for {service}...")
+                    ott_result = check_ott(service, url, self.screenshots_dir, self.logger)
                     
+                    passed = ott_result['success']
+                    final_screenshot = ott_result['final_screenshot_path']
+                    drm_detected = ott_result['drm_handshake_detected']
+                    drm_screenshot = ott_result['drm_screenshot_path']
+
+                    score = self.score_ott_result(passed)
+                    log_data = {'service': service, 'ip': current_ip, 'passed': passed, 'score': score, 'drm_detected': drm_detected, 'screenshot': final_screenshot}
+                    self.db.log_event(self.db_conn, "ott_check", json.dumps(log_data))
+                    
+                    # Emit events for real-time frontend updates
+                    event_timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+                    self.api_socketio.emit('new_db_log', {'timestamp': event_timestamp, 'event_type': 'ott_check', 'details': json.dumps(log_data)})
+                    self.api_socketio.emit('ott_check', {'timestamp': event_timestamp, 'details': log_data})
+                    self.api_socketio.emit('new_screenshot', {'filename': Path(final_screenshot).name})
+
+                    # Handle DRM handshake event specifically
+                    if drm_detected and drm_screenshot:
+                        self.logger.info(f"DRM handshake detected for {service}. Logging and sending alert.")
+                        drm_log_data = {'service': service, 'ip': current_ip, 'screenshot': drm_screenshot}
+                        self.db.log_event(self.db_conn, "drm_handshake", json.dumps(drm_log_data))
+                        
+                        # Emit events for real-time frontend updates
+                        drm_event_timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+                        self.api_socketio.emit('new_db_log', {'timestamp': drm_event_timestamp, 'event_type': 'drm_handshake', 'details': json.dumps(drm_log_data)})
+                        self.api_socketio.emit('drm_handshake', {'timestamp': drm_event_timestamp, 'details': drm_log_data})
+                        self.api_socketio.emit('new_screenshot', {'filename': Path(drm_screenshot).name})
+                        self.telegram.send_photo(self.config['telegram']['bot_token'], self.config['telegram']['chat_id'], drm_screenshot, caption=f"✅ DRM Handshake SUCCESS for {service} on IP {current_ip}")
+
                     if not passed:
                         all_passed = False
                         self.add_ip_to_cache(current_ip, 'bad')
-                        self.telegram.send_photo(self.config['telegram']['bot_token'], self.config['telegram']['chat_id'], screenshot, caption=f"❌ OTT Check FAILED for {service} on IP {current_ip}")
+                        self.telegram.send_photo(self.config['telegram']['bot_token'], self.config['telegram']['chat_id'], final_screenshot, caption=f"❌ OTT Check FAILED for {service} on IP {current_ip}")
                     else:
                         self.add_ip_to_cache(current_ip, 'good')
                         self.last_known_good_ip = current_ip
                         device_manager.set_last_known_good_ip(current_ip)
+                        # Only send generic success if no specific DRM event was fired
+                        if not drm_detected:
+                            self.telegram.send_photo(self.config['telegram']['bot_token'], self.config['telegram']['chat_id'], final_screenshot, caption=f"✅ OTT Check PASSED for {service} on IP {current_ip}")
 
                 # 4. Rotation logic
                 if not all_passed:
@@ -162,19 +203,20 @@ class SmartBot:
                         self.is_safe_mode = True
                         self.logger.error("Max retries reached. Entering SAFE MODE.")
                         self.db.log_event(self.db_conn, "error", "Max retries reached")
-                        self.api_socketio.emit('log', {'timestamp': time.strftime('%Y-%m-%d %H:%M:%S'), 'event_type': 'error', 'details': 'Max retries reached'})
                         self.api_socketio.emit('status_update', self.get_status())
                         self.telegram.send_message(self.config['telegram']['bot_token'], self.config['telegram']['chat_id'], "🚨 Max retries reached! Entering SAFE MODE.")
                 else:
                     self.retries = 0
-                # Emit status update after each loop
+                
                 self.api_socketio.emit('status_update', self.get_status())
                 
-                time.sleep(self.config.get('loop_interval_seconds', 300))
+                interval = self.config.get('loop_interval_seconds', 300)
+                self.logger.info(f"Loop finished. Sleeping for {interval} seconds.")
+                time.sleep(interval)
 
             except Exception as e:
                 self.is_safe_mode = True
-                self.logger.error(f"Unexpected error: {e}. Entering SAFE MODE.")
+                self.logger.error(f"Unexpected error: {e}. Entering SAFE MODE.", exc_info=True)
                 self.db.log_event(self.db_conn, "error", f"Unexpected error: {e}")
                 self.telegram.send_message(self.config['telegram']['bot_token'], self.config['telegram']['chat_id'], f"🔥 UNEXPECTED ERROR: {e}. Entering SAFE MODE.")
         
@@ -192,4 +234,4 @@ def main():
     bot.run()
 
 if __name__ == "__main__":
-    main() 
+    main()
