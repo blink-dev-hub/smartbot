@@ -28,6 +28,7 @@ class SmartBot:
         self.screenshots_dir = Path(config['paths'].get('screenshots', 'screenshots'))
         self.ip_cache_path = Path(config['paths'].get('ipcache', 'ip_cache.json'))
         self.db_path = Path(config['paths'].get('database', 'smartbot.db'))
+        self.session_data_dir = Path(config['paths'].get('browser_sessions', 'browser_sessions'))
         self.screenshots_dir.mkdir(parents=True, exist_ok=True)
         if not self.ip_cache_path.exists():
             with open(self.ip_cache_path, 'w') as f:
@@ -150,9 +151,9 @@ class SmartBot:
 
                 # 3. OTT checks
                 all_passed = True
-                for service, url in self.config.get('ott_services', {}).items():
+                for service, service_config in self.config.get('ott_services', {}).items():
                     self.logger.info(f"Checking OTT for {service}...")
-                    ott_result = check_ott(service, url, self.screenshots_dir, self.logger)
+                    ott_result = check_ott(service, service_config, self.screenshots_dir, self.logger)
                     
                     passed = ott_result['success']
                     final_screenshot = ott_result['final_screenshot_path']
@@ -181,7 +182,7 @@ class SmartBot:
                         self.api_socketio.emit('drm_handshake', {'timestamp': drm_event_timestamp, 'details': drm_log_data})
                         self.api_socketio.emit('new_screenshot', {'filename': Path(drm_screenshot).name})
                         self.telegram.send_photo(self.config['telegram']['bot_token'], self.config['telegram']['chat_id'], drm_screenshot, caption=f"✅ DRM Handshake SUCCESS for {service} on IP {current_ip}")
-
+                    
                     if not passed:
                         all_passed = False
                         self.add_ip_to_cache(current_ip, 'bad')

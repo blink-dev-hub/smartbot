@@ -6,9 +6,27 @@
       "database": "smartbot.db"
     },
     "ott_services": {
-      "hotstar": "https://www.hotstar.com",
-      "sonyliv": "https://www.sonyliv.com",
-      "zee5": "https://www.zee5.com"
+      "hotstar": {
+        "mode": "android",
+        "appPackage": "in.startv.hotstar",
+        "appActivity": "com.hotstar.MainActivity",
+        "device_udid": "8b9abf39",
+        "appium_server_url": "http://localhost:4723"
+      },
+      "sonyliv": {
+        "mode": "android",
+        "appPackage": "com.sonyliv",
+        "appActivity": "com.sonyliv.ui.splash.view.SplashActivity",
+        "device_udid": "8b9abf39",
+        "appium_server_url": "http://localhost:4723"
+      },
+      "zee5": {
+        "mode": "android",
+        "appPackage": "com.graymatrix.did",
+        "appActivity": "com.zee5.MainActivity",
+        "device_udid": "8b9abf39",
+        "appium_server_url": "http://localhost:4723"
+      }
     },
     "telegram": {
       "bot_token": "7607828569:AAGCy0lsXjH4Krij7o9P9qrgeZD3AkRdfGA",
