@@ -1,0 +1,15 @@
+[Unit]
+Description=SmartBot OTT Automation Service
+After=network.target
+
+[Service]
+Type=simple
+User=navi
+WorkingDirectory=/home/navi/Documents/backend
+ExecStart=/usr/bin/python3 /home/navi/Documents/backend/smartbot.py
+Restart=always
+RestartSec=10
+Environment=PYTHONPATH=/home/navi/Documents/backend
+
+[Install]
+WantedBy=multi-user.target 

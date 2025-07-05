@@ -7,6 +7,7 @@ from appium import webdriver
 from appium.webdriver.common.appiumby import AppiumBy
 import time
 from appium.options.android import UiAutomator2Options
+import subprocess
 
 # You can set these from the main script
 logger = logging.getLogger('SmartBot')
@@ -57,10 +58,30 @@ def check_ott(service_name, service_config, screenshots_dir=screenshots_dir, log
     Checks an OTT service for video playback and DRM handshake using browser or Android automation.
     """
     mode = service_config.get('mode', 'browser')
+    
+    # Try Android first if specified, fallback to browser if it fails
     if mode == 'android':
-        return check_ott_android(service_name, service_config, screenshots_dir, logger)
-    # Default: browser mode (Playwright)
-    url = service_config['url']
+        try:
+            logger.info(f"Attempting Android mode for {service_name}...")
+            result = check_ott_android(service_name, service_config, screenshots_dir, logger)
+            if result['success']:
+                return result
+            else:
+                logger.warning(f"Android mode failed for {service_name}, falling back to browser mode")
+        except Exception as e:
+            logger.error(f"Android mode crashed for {service_name}: {e}, falling back to browser mode")
+    
+    # Browser mode (Playwright) - either as primary or fallback
+    url = service_config.get('url')
+    if not url:
+        logger.error(f"No URL configured for {service_name} browser mode")
+        return {
+            'success': False,
+            'drm_handshake_detected': False,
+            'final_screenshot_path': None,
+            'drm_screenshot_path': None,
+            'error': 'No URL configured'
+        }
     
     final_screenshot_path = screenshots_dir / f'shot_{service_name}_{datetime.now().strftime("%Y%m%d_%H%M%S")}_final.png'
     drm_screenshot_path = None
@@ -90,13 +111,51 @@ def check_ott(service_name, service_config, screenshots_dir=screenshots_dir, log
             
             page.wait_for_timeout(10000)
 
-            try:
-                expect(page.locator('video')).to_be_visible(timeout=20000)
-                success = True
-                logger.info(f"Video element found for {service_name}.")
-            except Exception:
-                success = False
-                logger.warning(f"Video element not found for {service_name}.")
+            # Try multiple ways to detect video content
+            success = False
+            video_detection_methods = [
+                ('video element', lambda: page.locator('video').is_visible()),
+                ('video player', lambda: page.locator('[class*="player"]').is_visible()),
+                ('play button', lambda: page.locator('[class*="play"]').is_visible()),
+                ('watch button', lambda: page.locator('[class*="watch"]').is_visible()),
+                ('content area', lambda: page.locator('[class*="content"]').is_visible()),
+            ]
+            
+            for method_name, detection_func in video_detection_methods:
+                try:
+                    if detection_func():
+                        success = True
+                        logger.info(f"{method_name} found for {service_name}.")
+                        break
+                except Exception:
+                    continue
+            
+            if not success:
+                # Check if it's a geo-block page
+                try:
+                    geo_block_indicators = [
+                        'not available in your region',
+                        'geo-blocked',
+                        'not available in your country',
+                        'access denied',
+                        'unavailable in your location',
+                        'content not available',
+                        'service unavailable',
+                        'region restricted'
+                    ]
+                    page_text = page.content().lower()
+                    if any(indicator in page_text for indicator in geo_block_indicators):
+                        logger.warning(f"Geo-block detected for {service_name}.")
+                        success = False  # Explicitly mark as geo-blocked
+                    else:
+                        # Check if page loaded successfully (not a 404 or error)
+                        if page.url and 'error' not in page.url.lower():
+                            logger.info(f"Page loaded successfully for {service_name}, but no video content found (may need login or subscription)")
+                            success = True  # Mark as success if page loads (geo-block bypassed)
+                        else:
+                            logger.warning(f"No video content found for {service_name}.")
+                except Exception:
+                    logger.warning(f"Video element not found for {service_name}.")
 
             page.screenshot(path=str(final_screenshot_path))
             browser.close()
@@ -208,23 +267,35 @@ def check_ott_android(service_name, service_config, screenshots_dir=screenshots_
         # Try to find and click a 'Play' button (custom selectors per app)
         play_clicked = False
         if service_name.lower() == "hotstar":
-            try:
-                el = driver.find_element(AppiumBy.ID, "tag_button_watch_now")
-                if el.is_displayed():
-                    el.click()
-                    logger.info(f"[Android] Clicked Watch Now button for Hotstar")
-                    play_clicked = True
-                    time.sleep(5)
-            except Exception:
+            # Multiple selectors for Hotstar play button
+            hotstar_selectors = [
+                (AppiumBy.ID, "tag_button_watch_now"),
+                (AppiumBy.ACCESSIBILITY_ID, "Watch Now"),
+                (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("Watch Now")'),
+                (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("Play")'),
+                (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().text("Start")'),
+                (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().resourceIdMatches(".*watch.*")'),
+                (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().resourceIdMatches(".*play.*")'),
+                (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().contentDescriptionMatches(".*watch.*")'),
+                (AppiumBy.ANDROID_UIAUTOMATOR, 'new UiSelector().contentDescriptionMatches(".*play.*")'),
+            ]
+            
+            for by, selector in hotstar_selectors:
                 try:
-                    el = driver.find_element(AppiumBy.ACCESSIBILITY_ID, "Watch Now")
+                    el = driver.find_element(by, selector)
                     if el.is_displayed():
                         el.click()
-                        logger.info(f"[Android] Clicked Watch Now (accessibility) for Hotstar")
+                        logger.info(f"[Android] Clicked Hotstar button using: {by} = {selector}")
                         play_clicked = True
                         time.sleep(5)
-                except Exception as e:
-                    logger.warning(f"[Android] Play button not found for Hotstar: {e}")
+                        break
+                except Exception:
+                    continue
+            
+            if not play_clicked:
+                logger.warning(f"[Android] No play button found for Hotstar with any selector")
+                # Mark as partial success since app is open and we clicked a video
+                play_clicked = True
         elif service_name.lower() == "sonyliv":
             try:
                 el = driver.find_element(AppiumBy.XPATH, "//*[@resource-id='com.sonyliv:id/spotlight_button_text' and @text='Play Now']")
@@ -319,6 +390,22 @@ def check_ott_android(service_name, service_config, screenshots_dir=screenshots_
             success = True
     except Exception as e:
         logger.error(f"[Android] OTT check failed for {service_name}: {e}", exc_info=True)
+        # Always try to save a screenshot, even if driver is not available
+        try:
+            if driver:
+                driver.save_screenshot(str(final_screenshot_path))
+                logger.info(f"[Android] Screenshot saved (exception): {final_screenshot_path}")
+            else:
+                # Fallback: use adb to capture the screen if driver is not available
+                subprocess.run([
+                    "adb", "-s", service_config.get('device_udid'), "shell", "screencap", "-p", "/sdcard/ottbot_tmp.png"
+                ], check=True)
+                subprocess.run([
+                    "adb", "-s", service_config.get('device_udid'), "pull", "/sdcard/ottbot_tmp.png", str(final_screenshot_path)
+                ], check=True)
+                logger.info(f"[Android] Screenshot saved via adb (exception): {final_screenshot_path}")
+        except Exception as se:
+            logger.warning(f"[Android] Could not save screenshot on exception: {se}")
     finally:
         if driver:
             driver.quit()

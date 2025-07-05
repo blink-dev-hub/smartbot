@@ -11,21 +11,16 @@
         "appPackage": "in.startv.hotstar",
         "appActivity": "com.hotstar.MainActivity",
         "device_udid": "8b9abf39",
-        "appium_server_url": "http://localhost:4723"
+        "appium_server_url": "http://localhost:4723",
+        "url": "https://www.hotstar.com/in"
       },
       "sonyliv": {
-        "mode": "android",
-        "appPackage": "com.sonyliv",
-        "appActivity": "com.sonyliv.ui.splash.view.SplashActivity",
-        "device_udid": "8b9abf39",
-        "appium_server_url": "http://localhost:4723"
+        "mode": "browser",
+        "url": "https://www.sonyliv.com"
       },
       "zee5": {
-        "mode": "android",
-        "appPackage": "com.graymatrix.did",
-        "appActivity": "com.zee5.MainActivity",
-        "device_udid": "8b9abf39",
-        "appium_server_url": "http://localhost:4723"
+        "mode": "browser",
+        "url": "https://www.zee5.com"
       }
     },
     "telegram": {

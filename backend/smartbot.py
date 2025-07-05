@@ -186,7 +186,7 @@ class SmartBot:
                     if not passed:
                         all_passed = False
                         self.add_ip_to_cache(current_ip, 'bad')
-                        self.telegram.send_photo(self.config['telegram']['bot_token'], self.config['telegram']['chat_id'], final_screenshot, caption=f"❌ OTT Check FAILED for {service} on IP {current_ip}")
+                        self.telegram.send_message(self.config['telegram']['bot_token'], self.config['telegram']['chat_id'], f"❌ OTT Check FAILED for {service} on IP {current_ip}")
                     else:
                         self.add_ip_to_cache(current_ip, 'good')
                         self.last_known_good_ip = current_ip
@@ -206,6 +206,11 @@ class SmartBot:
                         self.db.log_event(self.db_conn, "error", "Max retries reached")
                         self.api_socketio.emit('status_update', self.get_status())
                         self.telegram.send_message(self.config['telegram']['bot_token'], self.config['telegram']['chat_id'], "🚨 Max retries reached! Entering SAFE MODE.")
+                    else:
+                        self.api_socketio.emit('status_update', self.get_status())
+                        self.logger.info("Sleeping for 5 seconds after IP rotation.")
+                        time.sleep(5)
+                    continue  # Skip the long sleep at the end of the loop
                 else:
                     self.retries = 0
                 
